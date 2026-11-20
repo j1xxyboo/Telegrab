@@ -1,0 +1,14 @@
+# Runtime dependencies bundled into the APK by Chaquopy (pip --only-binary).
+#
+# pydantic 2 needs the compiled pydantic-core, which has no Android build, so the
+# app pins the pure-Python pydantic 1.x / FastAPI 0.99 pair. The server code only
+# uses BaseModel with plain str/int fields, which behaves identically on both.
+pyaes==1.6.1
+telethon>=1.36
+fastapi==0.99.1
+pydantic>=1.10,<2
+starlette==0.27.0
+uvicorn>=0.30
+segno>=1.5
+# AES-IGE for Telethon (cryptg has no Android build); Android wheel from Chaquopy's index.
+pycryptodome==3.21.0

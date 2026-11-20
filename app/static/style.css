@@ -64,6 +64,8 @@ button { -webkit-appearance: none; appearance: none; }
 .btn.ghost { background: transparent; color: var(--accent); }
 .btn.ghost:hover { background: var(--accent-soft); }
 .btn:disabled { opacity: .45; cursor: default; }
+a.btn { text-decoration: none; }
+#qr-open { margin: 12px 0 4px; width: 100%; }
 .icon-btn {
   display: inline-grid; place-items: center; width: 40px; height: 40px; flex: none;
   border-radius: 50%; border: 0; background: transparent; color: var(--muted-2);

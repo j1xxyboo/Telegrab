@@ -24,6 +24,9 @@ const S = {
 
 let qrTimer = null;
 
+// Set by the Android app's WebView (see MainActivity.Bridge); false in a normal browser.
+const IN_APP = typeof window.TeleGrabAndroid !== "undefined";
+
 /* ------------------------------------------------------------------ utils */
 
 function el(tag, props = {}, children = []) {
@@ -266,6 +269,14 @@ function applyQr(res) {
     return false;
   }
   if (res.image) $("#qr-img").src = res.image;
+  const open = $("#qr-open");
+  if (res.url && res.status === "pending") {
+    // A phone cannot scan its own screen; the link hands the login straight to the Telegram app.
+    open.href = res.url;
+    open.classList.toggle("hidden", !IN_APP);
+  } else {
+    open.classList.add("hidden");
+  }
   if (res.status === "pending") {
     $("#qr-status").textContent = "Waiting for you to scan…";
   } else if (res.status === "idle") {
@@ -950,6 +961,15 @@ function bindGlobal() {
     if (!event.target.closest(".menu-wrap")) $("#menu").classList.add("hidden");
   });
   $("#back-btn").addEventListener("click", () => $("#app").classList.remove("chat-open"));
+
+  if (IN_APP) {
+    const keys = $("#apikeys-btn");
+    keys.classList.remove("hidden");
+    keys.addEventListener("click", () => {
+      $("#menu").classList.add("hidden");
+      window.TeleGrabAndroid.openApiKeys();
+    });
+  }
   $("#search-toggle").addEventListener("click", () => {
     const head = $(".chat-head");
     head.classList.toggle("searching");
@@ -982,5 +1002,14 @@ function stepLightbox(delta) {
   if (!item.media) return;
   openLightbox(item);
 }
+
+/* Hardware Back in the Android app: undo the innermost thing first. Returns true if it did something. */
+window.__tgBack = () => {
+  if (!$("#lightbox").classList.contains("hidden")) { closeLightbox(); return true; }
+  if (S.selecting) { setSelecting(false); return true; }
+  if (!$("#menu").classList.contains("hidden")) { $("#menu").classList.add("hidden"); return true; }
+  if ($("#app").classList.contains("chat-open")) { $("#app").classList.remove("chat-open"); return true; }
+  return false;
+};
 
 boot();

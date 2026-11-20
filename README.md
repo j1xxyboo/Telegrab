@@ -39,6 +39,29 @@ Bulk download skips posts you have not paid for, and the media endpoint answers 
 
 ---
 
+## Android app
+
+TeleGrab also ships as a standalone APK: the Python server runs **inside the app** (via [Chaquopy](https://chaquo.com/chaquopy/)) and the same web UI is shown in a WebView, so no PC or server is needed.
+
+1. Download `TeleGrab-<version>-arm64.apk` from the [Releases](../../releases) page and install it (allow "install unknown apps" for your browser/file manager).
+2. On first launch paste your own **api_id / api_hash** (from <https://my.telegram.org/apps>). They are stored on the phone only; change them later from the menu → *API keys*.
+3. Sign in with the **Open Telegram to approve** button (a phone can't scan its own screen), or with your phone number.
+4. Downloads are saved to your public **Downloads** folder, with a progress notification.
+
+Notes: Android 10+ (arm64). A small notification keeps the server alive while a download runs in the background. The Telegram "paid post" rules above apply unchanged.
+
+Build it yourself (needs JDK 17+, the Android SDK and Python 3.13):
+
+```bash
+cd android
+./gradlew assembleRelease -PabiList=arm64-v8a -PbuildPython=$(which python3.13)
+# -> app/build/outputs/apk/release/app-release.apk
+```
+
+The APK pins pydantic 1.x / FastAPI 0.99 (pydantic 2 needs a compiled core with no Android build); `android/requirements-android.txt` lists everything bundled. Without `android/keystore.properties` the release build is signed with the debug key.
+
+---
+
 ## How to make it work
 
 ### What you need

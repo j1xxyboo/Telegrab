@@ -54,6 +54,7 @@
         <li><span>Go to <b>Settings → Devices → Link Desktop Device</b>.</span></li>
         <li><span>Point it at this code. No SMS, no login code.</span></li>
       </ol>
+      <a id="qr-open" class="btn primary hidden" href="#" rel="noopener"><svg class="ic"><use href="#i-plane"/></svg><span>Open Telegram to approve</span></a>
       <p id="qr-status" class="hint">Connecting to Telegram…</p>
       <div class="row">
         <button id="qr-refresh" class="btn ghost" type="button"><svg class="ic"><use href="#i-refresh"/></svg><span>New code</span></button>
@@ -106,6 +107,7 @@
         <button id="menu-btn" class="icon-btn" title="Menu"><svg class="ic"><use href="#i-menu"/></svg></button>
         <div id="menu" class="menu hidden">
           <div id="account" class="menu-account"></div>
+          <button id="apikeys-btn" class="menu-item hidden"><svg class="ic"><use href="#i-lock"/></svg><span>API keys</span></button>
           <button id="logout-btn" class="menu-item danger"><svg class="ic"><use href="#i-out"/></svg><span>Log out</span></button>
         </div>
       </div>
