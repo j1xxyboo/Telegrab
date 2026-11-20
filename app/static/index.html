@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>TeleGrab — Telegram media downloader</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<svg style="display:none" xmlns="http://www.w3.org/2000/svg">
+  <symbol id="i-send" viewBox="0 0 24 24"><path d="M3 11.5 21 3l-8.5 18-2.6-7.4L3 11.5Z"/></symbol>
+  <symbol id="i-dl" viewBox="0 0 24 24"><path d="M12 3v12m0 0 5-5m-5 5-5-5M4 21h16"/></symbol>
+  <symbol id="i-img" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="m4 18 5.5-5.5L14 17l3-3 3.5 3.5"/></symbol>
+  <symbol id="i-vid" viewBox="0 0 24 24"><rect x="3" y="5" width="13" height="14" rx="2"/><path d="m16 10 5-3v10l-5-3z"/></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></symbol>
+  <symbol id="i-music" viewBox="0 0 24 24"><circle cx="7" cy="18" r="3"/><circle cx="18" cy="16" r="3"/><path d="M10 18V7l11-2v11"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.6-3.6"/></symbol>
+  <symbol id="i-out" viewBox="0 0 24 24"><path d="M15 4h4a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1h-4"/><path d="M10 8l-4 4 4 4M6 12h9"/></symbol>
+  <symbol id="i-back" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></symbol>
+  <symbol id="i-close" viewBox="0 0 24 24"><path d="m5 5 14 14M19 5 5 19"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="m4 12.5 5 5L20 6.5"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4.5v15l13-7.5z" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-mega" viewBox="0 0 24 24"><path d="M4 10v4a1 1 0 0 0 1 1h2l9 5V4L7 9H5a1 1 0 0 0-1 1Z"/><path d="M19 8.5a5 5 0 0 1 0 7"/></symbol>
+  <symbol id="i-users" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.4"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><path d="M16 5.2A3.4 3.4 0 0 1 16 12m1.5 2.4A5.5 5.5 0 0 1 21 20"/></symbol>
+  <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4.5 20c0-4.1 3.4-7.5 7.5-7.5s7.5 3.4 7.5 7.5"/></symbol>
+  <symbol id="i-select" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="4"/><path d="m8 12.5 3 3 5.5-6"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.5 6.5"/><path d="M20 4v7h-7"/></symbol>
+  <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></symbol>
+  <symbol id="i-mute" viewBox="0 0 24 24"><path d="M4 10v4a1 1 0 0 0 1 1h2l5 4V5L7 9H5a1 1 0 0 0-1 1Z"/><path d="m16 9.5 5 5m0-5-5 5"/></symbol>
+  <symbol id="i-prev" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></symbol>
+  <symbol id="i-next" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></symbol>
+  <symbol id="i-zoom" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.6-3.6M8 11h6M11 8v6"/></symbol>
+  <symbol id="i-plane" viewBox="0 0 24 24"><path d="M21.5 3.5 2.8 10.7c-.9.4-.9 1.6 0 1.9l4.7 1.6 1.8 5.6c.3.8 1.3 1 1.9.4l2.6-2.5 4.9 3.6c.7.5 1.7.1 1.9-.7L23 4.8c.2-.9-.7-1.6-1.5-1.3Z" fill="currentColor" stroke="none"/></symbol>
+</svg>
+
+<!-- ================= LOGIN ================= -->
+<section id="login" class="screen login">
+  <div class="login-card">
+    <div class="brand">
+      <div class="brand-mark"><svg class="ic"><use href="#i-plane"/></svg></div>
+      <h1>TeleGrab</h1>
+      <p>Sign in with your Telegram account to browse and download media — including channels with saving disabled.</p>
+    </div>
+
+    <div id="cfg-warning" class="notice hidden"></div>
+
+    <div id="qr-panel" class="step qr-panel">
+      <label>Scan to sign in</label>
+      <div class="qr-frame"><img id="qr-img" alt="Telegram login QR code"></div>
+      <ol class="qr-steps">
+        <li><span>Open Telegram on your PC (where you are already signed in).</span></li>
+        <li><span>Go to <b>Settings → Devices → Link Desktop Device</b>.</span></li>
+        <li><span>Point it at this code. No SMS, no login code.</span></li>
+      </ol>
+      <p id="qr-status" class="hint">Connecting to Telegram…</p>
+      <div class="row">
+        <button id="qr-refresh" class="btn ghost" type="button"><svg class="ic"><use href="#i-refresh"/></svg><span>New code</span></button>
+        <button id="qr-use-phone" class="btn ghost" type="button">Use phone number</button>
+      </div>
+    </div>
+
+    <form id="step-phone" class="step hidden">
+      <label for="phone">Phone number</label>
+      <input id="phone" type="tel" autocomplete="tel" placeholder="+1 555 000 1234" required>
+      <button class="btn primary" type="submit"><span>Send login code</span><svg class="ic"><use href="#i-send"/></svg></button>
+      <p class="hint">International format, with the country code (e.g. <b>+49…</b>).</p>
+      <button id="use-qr" class="linkish" type="button">Scan a QR code instead ←</button>
+    </form>
+
+    <form id="step-code" class="step hidden">
+      <label for="code">Login code</label>
+      <input id="code" type="text" inputmode="numeric" autocomplete="one-time-code" placeholder="12345" required>
+      <p id="code-hint" class="hint"></p>
+      <button class="btn primary" type="submit"><span>Verify code</span><svg class="ic"><use href="#i-check"/></svg></button>
+      <div class="row">
+        <button id="resend-btn" class="btn ghost" type="button"><svg class="ic"><use href="#i-refresh"/></svg><span>Resend code</span></button>
+        <button class="btn ghost" type="button" data-restart>Different number</button>
+      </div>
+    </form>
+
+    <form id="step-password" class="step hidden">
+      <label for="password">Two-step password</label>
+      <input id="password" type="password" autocomplete="current-password" placeholder="Your cloud password" required>
+      <button class="btn primary" type="submit"><span>Unlock</span><svg class="ic"><use href="#i-lock"/></svg></button>
+      <div class="row">
+        <button class="btn ghost" type="button" data-restart>Start over</button>
+      </div>
+    </form>
+
+    <div id="login-error" class="error hidden"></div>
+    <div class="foot">
+      <p>Session keys stay on this server. Logging out revokes the login on Telegram.</p>
+      <button id="diag-btn" class="linkish" type="button">Not getting the code? Run a connection test</button>
+      <pre id="diag-out" class="diag hidden"></pre>
+    </div>
+  </div>
+</section>
+
+<!-- ================= APP ================= -->
+<section id="app" class="screen app hidden">
+  <aside id="sidebar" class="sidebar">
+    <div class="side-head">
+      <div class="menu-wrap">
+        <button id="menu-btn" class="icon-btn" title="Menu"><svg class="ic"><use href="#i-menu"/></svg></button>
+        <div id="menu" class="menu hidden">
+          <div id="account" class="menu-account"></div>
+          <button id="logout-btn" class="menu-item danger"><svg class="ic"><use href="#i-out"/></svg><span>Log out</span></button>
+        </div>
+      </div>
+      <div class="search-wrap">
+        <svg class="ic"><use href="#i-search"/></svg>
+        <input id="chat-search" type="search" placeholder="Search" autocomplete="off">
+      </div>
+    </div>
+    <div id="dialog-list" class="dialog-list"></div>
+  </aside>
+
+  <main class="main">
+    <div id="empty" class="empty">
+      <span class="empty-pill">Select a chat to see its media</span>
+    </div>
+
+    <div id="chat" class="chat hidden">
+      <header class="chat-head">
+        <button id="back-btn" class="icon-btn only-mobile" title="Back"><svg class="ic"><use href="#i-back"/></svg></button>
+        <div id="chat-avatar" class="avatar"></div>
+        <div class="chat-title">
+          <h2 id="chat-name">—</h2>
+          <div class="chat-meta"><span id="chat-type"></span><span id="chat-badge" class="badge hidden"><svg class="ic"><use href="#i-lock"/></svg>saving disabled</span></div>
+        </div>
+        <div class="spacer"></div>
+        <div class="search-wrap inline">
+          <svg class="ic"><use href="#i-search"/></svg>
+          <input id="media-search" type="search" placeholder="Search" autocomplete="off">
+        </div>
+        <button id="search-toggle" class="icon-btn" title="Search"><svg class="ic"><use href="#i-search"/></svg></button>
+        <button id="dl-loaded" class="icon-btn" title="Download everything loaded"><svg class="ic"><use href="#i-dl"/></svg></button>
+        <button id="select-btn" class="icon-btn" title="Select"><svg class="ic"><use href="#i-select"/></svg><span class="sr">Select</span></button>
+      </header>
+
+      <nav class="tabs" id="kind-tabs">
+        <button data-kind="media" class="active"><span>Media</span></button>
+        <button data-kind="photo"><span>Photos</span></button>
+        <button data-kind="video"><span>Videos</span></button>
+        <button data-kind="file"><span>Files</span></button>
+      </nav>
+
+      <div class="grid-wrap">
+        <div id="grid" class="grid"></div>
+        <div id="grid-status" class="grid-status"></div>
+      </div>
+
+      <div id="bulkbar" class="bulkbar hidden">
+        <button id="bulk-clear" class="icon-btn" title="Clear"><svg class="ic"><use href="#i-close"/></svg></button>
+        <span id="bulk-count">0 selected</span>
+        <div class="spacer"></div>
+        <button id="bulk-all" class="btn ghost">Select all</button>
+        <button id="bulk-dl" class="btn primary"><svg class="ic"><use href="#i-dl"/></svg><span>Download</span></button>
+      </div>
+    </div>
+  </main>
+</section>
+
+<!-- ================= LIGHTBOX ================= -->
+<div id="lightbox" class="lightbox hidden">
+  <div class="lb-head">
+    <div id="lb-avatar" class="avatar sm"></div>
+    <div class="lb-who">
+      <div id="lb-from" class="lb-from"></div>
+      <div id="lb-title" class="lb-title"></div>
+    </div>
+    <div class="spacer"></div>
+    <button id="lb-dl" class="icon-btn light" title="Download"><svg class="ic"><use href="#i-dl"/></svg></button>
+    <button id="lb-close" class="icon-btn light" title="Close"><svg class="ic"><use href="#i-close"/></svg></button>
+  </div>
+  <div class="lb-body">
+    <button id="lb-prev" class="lb-nav prev" title="Previous"><svg class="ic"><use href="#i-prev"/></svg></button>
+    <div class="lb-stage" id="lb-stage"></div>
+    <button id="lb-next" class="lb-nav next" title="Next"><svg class="ic"><use href="#i-next"/></svg></button>
+  </div>
+  <div class="lb-caption" id="lb-caption"></div>
+</div>
+
+<div id="toasts" class="toasts"></div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
