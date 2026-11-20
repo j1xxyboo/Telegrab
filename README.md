@@ -187,3 +187,7 @@ python3 tests/test_smoke.py
 ```
 
 Runs offline with a fake Telegram account, so no keys are needed.
+
+## Uploading to GitHub
+
+To push this project to GitHub from a Codespace, see **[PUSH.md](PUSH.md)**.

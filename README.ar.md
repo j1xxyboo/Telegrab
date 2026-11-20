@@ -218,4 +218,8 @@ python3 tests/test_smoke.py
 
 للتفاصيل التقنية وقائمة مسارات الـ API، راجع [النسخة الإنجليزية](README.md#api-for-developers).
 
+## الرفع إلى GitHub
+
+لرفع المشروع إلى GitHub من داخل Codespace، راجع ملف **[PUSH.md](PUSH.md#العربية)**.
+
 </div>
