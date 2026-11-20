@@ -21,6 +21,7 @@ from typing import AsyncIterator, Optional
 
 from telethon import TelegramClient, errors, utils
 from telethon.tl import functions, types
+from telethon.tl.custom.file import File as TgFile
 from telethon.tl.types import (
     InputMessagesFilterDocument,
     InputMessagesFilterPhotos,
@@ -57,6 +58,13 @@ _thumb_sem: Optional[asyncio.Semaphore] = None
 # references stay valid for about an hour, so a few minutes here is safe.
 MESSAGE_CACHE_TTL = 300
 MESSAGE_CACHE_MAX = 600
+
+# A paid post's purchase only shows up when we ask Telegram for its "extended"
+# media (messages.getExtendedMedia) — getMessages keeps returning the blurred
+# preview even after the Stars payment. Re-ask at most once per TTL, and only
+# for this many tiles per page, so a channel full of locked posts stays cheap.
+PAID_RECHECK_TTL = 120
+PAID_RESOLVE_PER_PAGE = 10
 
 
 def _thumb_limit() -> asyncio.Semaphore:
@@ -133,6 +141,168 @@ def _safe_name(name: str) -> str:
     return cleaned.strip() or "file"
 
 
+# --------------------------------------------------------------------------- #
+# Paid (Stars) posts
+#
+# A paid post arrives as ``MessageMediaPaidMedia``: a price plus a list of
+# ``MessageExtendedMedia``. Until the Stars payment exists on the account's
+# ledger, Telegram only sends ``MessageExtendedMediaPreview`` entries — a blurred
+# thumbnail, no file reference. Once paid, the entries become
+# ``MessageExtendedMedia`` wrapping a real ``MessageMediaPhoto``/``Document``.
+#
+# So a paid post can be *listed and previewed* here, and downloaded only when the
+# account has actually paid for it. There is nothing to "unlock" client-side: the
+# bytes are never sent before the payment is recorded server-side.
+# --------------------------------------------------------------------------- #
+
+def paid_media(message) -> Optional[types.MessageMediaPaidMedia]:
+    media = getattr(message, "media", None)
+    return media if isinstance(media, types.MessageMediaPaidMedia) else None
+
+
+def _kind_of_media(media) -> Optional[str]:
+    """Classify a bare ``MessageMedia`` (the inner media of an unlocked post)."""
+    if isinstance(media, types.MessageMediaPhoto):
+        return "photo"
+    if isinstance(media, types.MessageMediaDocument):
+        attributes = getattr(media.document, "attributes", None) or []
+        if any(isinstance(a, types.DocumentAttributeSticker) for a in attributes):
+            return "sticker"
+        if any(isinstance(a, types.DocumentAttributeAnimated) for a in attributes):
+            return "animation"
+        if any(isinstance(a, types.DocumentAttributeVideo) for a in attributes):
+            return "video"
+        audio = next((a for a in attributes if isinstance(a, types.DocumentAttributeAudio)), None)
+        if audio is not None:
+            return "voice" if getattr(audio, "voice", False) else "audio"
+        return "file"
+    return None
+
+
+class PaidView:
+    """Normal-message-shaped view over the media inside an *already paid* post.
+
+    Telethon's helpers (``thumb_index``, ``media_size``, ``iter_download``) all
+    read ``message.media`` / ``message.photo`` / ``message.document``; this shim
+    forwards those to the inner media so an unlocked post downloads like any
+    other. Everything else (id, date, peer, text) falls through to the message.
+    """
+
+    __slots__ = ("message", "media", "_file")
+
+    def __init__(self, message, media):
+        self.message = message
+        self.media = media
+        self._file = None
+
+    @property
+    def photo(self):
+        if isinstance(self.media, types.MessageMediaPhoto) and isinstance(self.media.photo, types.Photo):
+            return self.media.photo
+        return None
+
+    @property
+    def document(self):
+        if isinstance(self.media, types.MessageMediaDocument) and isinstance(self.media.document, types.Document):
+            return self.media.document
+        return None
+
+    def _attribute(self, cls):
+        attributes = getattr(self.document, "attributes", None) or []
+        return next((a for a in attributes if isinstance(a, cls)), None)
+
+    @property
+    def video(self):
+        return self.document if self._attribute(types.DocumentAttributeVideo) else None
+
+    @property
+    def gif(self):
+        return self.document if self._attribute(types.DocumentAttributeAnimated) else None
+
+    @property
+    def sticker(self):
+        return self.document if self._attribute(types.DocumentAttributeSticker) else None
+
+    @property
+    def voice(self):
+        audio = self._attribute(types.DocumentAttributeAudio)
+        return self.document if audio is not None and getattr(audio, "voice", False) else None
+
+    @property
+    def audio(self):
+        audio = self._attribute(types.DocumentAttributeAudio)
+        return self.document if audio is not None and not getattr(audio, "voice", False) else None
+
+    @property
+    def file(self):
+        if self._file is None:
+            source = self.photo or self.document
+            if source is not None:
+                self._file = TgFile(source)
+        return self._file
+
+    def __getattr__(self, name):
+        return getattr(self.message, name)
+
+
+def paid_info(message) -> Optional[dict]:
+    """Price/purchase state of a paid post, or ``None`` for an ordinary message."""
+    media = paid_media(message)
+    if media is None:
+        return None
+    entries = list(media.extended_media or [])
+    unlocked = any(isinstance(e, types.MessageExtendedMedia) for e in entries)
+    preview = next((e for e in entries if isinstance(e, types.MessageExtendedMediaPreview)), None)
+    inner = next((e.media for e in entries if isinstance(e, types.MessageExtendedMedia)), None)
+    kind = _kind_of_media(inner) if inner is not None else None
+    if kind is None:
+        # Locked: guess from the preview so the grid can draw a video tile.
+        kind = "video" if getattr(preview, "video_duration", None) else "photo"
+    return {
+        "stars": int(media.stars_amount or 0),
+        "unlocked": unlocked,
+        "count": len(entries) or 1,
+        "kind": kind,
+        "duration": getattr(preview, "video_duration", None) if preview else None,
+        "width": getattr(preview, "w", None) if preview else None,
+        "height": getattr(preview, "h", None) if preview else None,
+    }
+
+
+def paid_view(message):
+    """``PaidView`` when a paid post has been bought, else ``None``."""
+    info = paid_info(message)
+    if not info or not info["unlocked"]:
+        return None
+    inner = next(
+        (e.media for e in paid_media(message).extended_media if isinstance(e, types.MessageExtendedMedia)),
+        None,
+    )
+    return PaidView(message, inner) if inner is not None else None
+
+
+def downloadable(message):
+    """What to read media from: the message, a paid post's inner media, or None."""
+    view = paid_view(message)
+    if view is not None:
+        return view
+    if paid_media(message) is not None:
+        return None  # locked: Telegram never sent us the file
+    return message
+
+
+def _tab_matches(kind: str, media_kind_: str) -> bool:
+    if kind == "media":
+        return True
+    if kind == "photo":
+        return media_kind_ == "photo"
+    if kind == "video":
+        return media_kind_ in ("video", "animation")
+    if kind == "file":
+        return media_kind_ == "file"
+    return False
+
+
 def media_kind(message) -> Optional[str]:
     if message is None:
         return None
@@ -165,19 +335,26 @@ def media_filename(message, kind: str) -> str:
 
 
 def message_payload(message) -> dict:
-    kind = media_kind(message)
-    file = getattr(message, "file", None)
+    paid = paid_info(message)
+    source = paid_view(message) or message
+    kind = media_kind(source)
+    if kind is None and paid is not None:
+        kind = paid["kind"]  # locked paid item: preview-only tile
+    file = getattr(source, "file", None)
     media = None
     if kind:
+        duration = getattr(file, "duration", None) if file else None
         media = {
             "kind": kind,
-            "size": media_size(message) or 0,
-            "name": media_filename(message, kind),
+            "size": media_size(source) or 0,
+            "name": media_filename(source, kind),
             "mime": getattr(file, "mime_type", None) if file else None,
-            "duration": getattr(file, "duration", None) if file else None,
-            "width": getattr(file, "width", None) if file else None,
-            "height": getattr(file, "height", None) if file else None,
+            "duration": duration if duration is not None else (paid["duration"] if paid else None),
+            "width": getattr(file, "width", None) if file else (paid["width"] if paid else None),
+            "height": getattr(file, "height", None) if file else (paid["height"] if paid else None),
         }
+        if paid is not None:
+            media["paid"] = paid
     return {
         "id": message.id,
         "date": message.date.isoformat() if message.date else None,
@@ -207,7 +384,16 @@ def _cache_evict() -> None:
 
 
 async def cached_thumbnail(session: "UserSession", message) -> Optional[bytes]:
-    key = f"t_{session.sid[:12]}_{utils.get_peer_id(message.peer_id)}_{message.id}.bin"
+    paid = paid_info(message)
+    if paid is not None and not paid["unlocked"]:
+        # A blurred preview is all Telegram gives us for a locked post, and it
+        # must never be cached: the very same URL has to return the real
+        # thumbnail the moment the post is paid for.
+        return await _paid_preview(session, message)
+    # Bought posts get their own cache key so a blur left behind by an older
+    # version (which cached previews) can never mask the real thumbnail.
+    suffix = "_paid" if paid is not None else ""
+    key = f"t_{session.sid[:12]}_{utils.get_peer_id(message.peer_id)}_{message.id}{suffix}.bin"
     path = _cache_path(key)
     if path.is_file():
         try:
@@ -238,17 +424,15 @@ _thumb_inflight: dict[str, asyncio.Task] = {}
 
 
 async def _fetch_thumbnail(session: "UserSession", message, path: Path) -> Optional[bytes]:
-    index = thumb_index(message)
-    if index is None:
-        return None
-    async with _thumb_limit():
-        buf = io.BytesIO()
-        try:
-            await session.client.download_media(message, file=buf, thumb=index)
-        except Exception as exc:
-            log.debug("thumbnail %s/%s failed: %r", utils.get_peer_id(message.peer_id), message.id, exc)
-            return None
-    data = buf.getvalue()
+    view = paid_view(message)
+    if view is not None:
+        data = await _download_thumb(session, view)
+    elif paid_media(message) is not None:
+        # Locked paid post: the only image Telegram gives us is the blur. Do not
+        # cache it — once the post is paid the same URL must yield the real thumb.
+        return await _paid_preview(session, message)
+    else:
+        data = await _download_thumb(session, message)
     if not data:
         return None
     try:
@@ -257,6 +441,68 @@ async def _fetch_thumbnail(session: "UserSession", message, path: Path) -> Optio
     except OSError:
         pass
     return data
+
+
+async def _download_thumb(session: "UserSession", message) -> Optional[bytes]:
+    index = thumb_index(message)
+    if index is None:
+        return None
+    # ``download_media`` only unwraps a real ``Message``; a ``PaidView`` would
+    # fall through every isinstance check and return None without a word. Hand
+    # it the inner media instead.
+    target = message.media if isinstance(message, PaidView) else message
+    async with _thumb_limit():
+        buf = io.BytesIO()
+        try:
+            await session.client.download_media(target, file=buf, thumb=index)
+        except Exception as exc:
+            log.debug("thumbnail %s/%s failed: %r", utils.get_peer_id(message.peer_id), message.id, exc)
+            return None
+    return buf.getvalue() or None
+
+
+def _looks_like_image(data: Optional[bytes]) -> bool:
+    return bool(data) and (data[:3] == b"\xff\xd8\xff" or data[:8] == b"\x89PNG\r\n\x1a\n")
+
+
+async def _paid_preview(session: "UserSession", message) -> Optional[bytes]:
+    """Blurred preview of a locked paid post (embedded, or a legacy file location)."""
+    entries = list(paid_media(message).extended_media or [])
+    preview = next((e for e in entries if isinstance(e, types.MessageExtendedMediaPreview)), None)
+    thumb = getattr(preview, "thumb", None)
+    if thumb is None:
+        return None
+    if isinstance(thumb, types.PhotoCachedSize):
+        return thumb.bytes if _looks_like_image(thumb.bytes) else None
+    if isinstance(thumb, types.PhotoStrippedSize):
+        try:
+            data = utils.stripped_photo_to_jpg(thumb.bytes)
+        except Exception:
+            return None
+        return data if _looks_like_image(data) else None
+    # Plain PhotoSize: all we have is the deprecated volume/local location (there
+    # is no Photo object until the post is paid for), which upload.getFile serves.
+    location = getattr(thumb, "location", None)
+    size = getattr(thumb, "size", 0) or 0
+    if location is None or not size or not hasattr(location, "volume_id"):
+        return None
+    buf = io.BytesIO()
+    try:
+        await session.client.download_file(
+            types.InputFileLocation(
+                volume_id=location.volume_id,
+                local_id=location.local_id,
+                secret=getattr(location, "secret", 0) or 0,
+                file_reference=b"",
+            ),
+            buf,
+            file_size=size,
+        )
+    except Exception as exc:
+        log.debug("paid preview %s/%s failed: %r", utils.get_peer_id(message.peer_id), message.id, exc)
+        return None
+    data = buf.getvalue()
+    return data if _looks_like_image(data) else None
 
 
 async def cached_avatar(client: TelegramClient, entity) -> Optional[bytes]:
@@ -378,6 +624,9 @@ class UserSession:
         # Recently fetched messages: the gallery asks for a thumbnail per tile,
         # and each miss costs a getMessages round-trip. Keyed by (peer, id).
         self._msg_cache: dict[tuple[int, int], tuple[float, object]] = {}
+        # Paid posts whose Stars purchase we already checked recently, so a page
+        # full of locked posts does not fire getExtendedMedia on every load.
+        self._paid_checked: dict[tuple[int, int], float] = {}
 
     # -- lifecycle ---------------------------------------------------------- #
 
@@ -665,9 +914,13 @@ class UserSession:
             preview = ""
             if last is not None:
                 text = (getattr(last, "message", "") or "").strip().splitlines()
-                kind = media_kind(last)
-                label = {"photo": "Photo", "video": "Video", "animation": "GIF", "voice": "Voice message",
-                         "audio": "Audio", "sticker": "Sticker", "file": "File"}.get(kind or "", "")
+                paid = paid_info(last)
+                kind = media_kind(last) or (paid["kind"] if paid else None)
+                if paid is not None:
+                    label = f"⭐ {paid['stars']}"
+                else:
+                    label = {"photo": "Photo", "video": "Video", "animation": "GIF", "voice": "Voice message",
+                             "audio": "Audio", "sticker": "Sticker", "file": "File"}.get(kind or "", "")
                 preview = text[0] if text else label
                 if text and label:
                     preview = f"{label}, {preview}"
@@ -729,13 +982,25 @@ class UserSession:
                         continue
                     seen.add(m.id)
                     items.append(m)
+            items = await self._sweep_paid(entity, items, seen, kind, kwargs)
             items.sort(key=lambda m: m.id, reverse=True)
             items = items[:limit]
             next_offset = items[-1].id if len(items) == limit else 0
         else:
             batch = await self.client.get_messages(entity, filter=filter_, **kwargs)
             items = [m for m in batch if media_kind(m)]
+            items = await self._sweep_paid(entity, items, {m.id for m in items}, kind, kwargs)
+            items.sort(key=lambda m: m.id, reverse=True)
             next_offset = items[-1].id if len(items) == limit else 0
+
+        # A bought post still looks locked until getExtendedMedia answers.
+        locked = [m for m in items if (paid_info(m) or {}).get("unlocked") is False]
+        if locked:
+            await asyncio.gather(
+                *(self.resolve_paid(m, entity=entity, force=offset_id == 0)
+                  for m in locked[:PAID_RESOLVE_PER_PAGE]),
+                return_exceptions=True,
+            )
 
         for item in items:
             self._remember(item)
@@ -743,6 +1008,28 @@ class UserSession:
             "messages": [message_payload(m) for m in items],
             "next_offset": next_offset,
         }
+
+    async def _sweep_paid(self, entity, items: list, seen: set, kind: str, kwargs: dict) -> list:
+        """Add paid posts to a page.
+
+        Telegram's media filters never return ``MessageMediaPaidMedia`` messages,
+        so they are invisible in every tab. One unfiltered page costs little and
+        lets the gallery show them (preview + price) instead of hiding them.
+        """
+        try:
+            batch = await self.client.get_messages(entity, **kwargs)
+        except Exception as exc:
+            log.debug("paid sweep failed: %r", exc)
+            return items
+        for m in batch:
+            if m.id in seen:
+                continue
+            info = paid_info(m)
+            if info is None or not _tab_matches(kind, info["kind"]):
+                continue
+            seen.add(m.id)
+            items.append(m)
+        return items
 
     def _remember(self, message) -> None:
         if message is None or not getattr(message, "id", None):
@@ -772,8 +1059,50 @@ class UserSession:
         msg = await self.client.get_messages(entity, ids=message_id)
         if isinstance(msg, list):
             msg = msg[0] if msg else None
+        if msg is not None:
+            msg = await self.resolve_paid(msg, entity=entity, force=fresh)
         self._remember(msg)
         return msg
+
+    async def resolve_paid(self, message, entity=None, *, force: bool = False):
+        """Unlock a paid post that the account has already bought.
+
+        ``getMessages`` keeps handing back the blurred ``MessageExtendedMediaPreview``
+        even after payment; the real media only comes from
+        ``messages.getExtendedMedia``. Ask for it, write the result back into the
+        message (so the in-memory cache and the gallery agree), and carry on.
+        """
+        info = paid_info(message)
+        if info is None or info["unlocked"]:
+            return message
+        key = (utils.get_peer_id(message.peer_id), message.id)
+        now = time.time()
+        if not force and now - self._paid_checked.get(key, 0.0) < PAID_RECHECK_TTL:
+            return message
+        self._paid_checked[key] = now
+        try:
+            if entity is None:
+                entity = await self.client.get_input_entity(message.peer_id)
+            else:
+                entity = await self.client.get_input_entity(entity)
+            updates = await self.client(
+                functions.messages.GetExtendedMediaRequest(peer=entity, id=[message.id])
+            )
+        except Exception as exc:
+            log.debug("getExtendedMedia %s failed: %r", key, exc)
+            return message
+        entries = next(
+            (u.extended_media for u in (getattr(updates, "updates", None) or [])
+             if isinstance(u, types.UpdateMessageExtendedMedia) and u.msg_id == message.id),
+            None,
+        )
+        if not entries or not any(isinstance(e, types.MessageExtendedMedia) for e in entries):
+            return message
+        media = paid_media(message)
+        media.extended_media = entries
+        log.info("paid post %s/%s unlocked by purchase (%d item(s))", key[0], key[1], len(entries))
+        self._remember(message)
+        return message
 
     # -- download ----------------------------------------------------------- #
 
@@ -808,9 +1137,11 @@ class UserSession:
                     raise
                 refreshed = True
                 fresh = await self.message(utils.get_peer_id(current.peer_id), current.id, fresh=True)
-                if fresh is None or getattr(fresh, "media", None) is None:
+                if fresh is None:
                     raise
-                current = fresh
+                current = downloadable(fresh)
+                if current is None or getattr(current, "media", None) is None:
+                    raise
 
 
 # --------------------------------------------------------------------------- #

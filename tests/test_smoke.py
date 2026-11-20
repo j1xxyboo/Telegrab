@@ -9,7 +9,7 @@ import asyncio
 import datetime as dt
 import sys
 from pathlib import Path
-from types import SimpleNamespace
+from types import SimpleNamespace, MethodType
 
 import httpx
 
@@ -61,14 +61,61 @@ class FakeSession:
                                  duration=63.5, width=1920, height=1080),
         )
 
+    def _paid_message(self):
+        """A locked Stars post, as Telegram delivers it before payment."""
+        from telethon.tl import types as tl
+
+        preview = tl.MessageExtendedMediaPreview(
+            w=1280, h=720, thumb=tl.PhotoStrippedSize(type="j", bytes=b"\x01\x02\x03"),
+        )
+        return tl.Message(
+            id=44,
+            peer_id=tl.PeerChannel(1234567890),
+            date=dt.datetime(2026, 1, 3, tzinfo=dt.timezone.utc),
+            message="locked caption",
+            media=tl.MessageMediaPaidMedia(stars_amount=120, extended_media=[preview]),
+        )
+
     async def messages(self, peer, *, limit=48, offset_id=0, kind="media", search=""):
         return {
-            "messages": [tg.message_payload(self._message())],
+            "messages": [tg.message_payload(self._message()), tg.message_payload(self._paid_message())],
             "next_offset": 0,
         }
 
-    async def message(self, peer, message_id):
-        return self._message() if message_id == 42 else None
+    def _bought_message(self):
+        """The same Stars post after payment: Telegram now hands over the media."""
+        from telethon.tl import types as tl
+
+        doc = tl.Document(
+            id=55, access_hash=66, file_reference=b"ref", date=dt.datetime(2026, 1, 3, tzinfo=dt.timezone.utc),
+            mime_type="video/mp4", size=len(BLOB), dc_id=2,
+            attributes=[
+                tl.DocumentAttributeVideo(duration=63, w=1920, h=1080),
+                tl.DocumentAttributeFilename(file_name="clip final.mp4"),
+            ],
+        )
+        return tl.Message(
+            id=45,
+            peer_id=tl.PeerChannel(1234567890),
+            date=dt.datetime(2026, 1, 3, tzinfo=dt.timezone.utc),
+            message="bought caption",
+            media=tl.MessageMediaPaidMedia(
+                stars_amount=120,
+                extended_media=[tl.MessageExtendedMedia(media=tl.MessageMediaDocument(document=doc))],
+            ),
+        )
+
+    async def resolve_paid(self, message, entity=None, *, force=False):
+        return message
+
+    async def message(self, peer, message_id, *, fresh=False):
+        if message_id == 42:
+            return self._message()
+        if message_id == 44:
+            return self._paid_message()
+        if message_id == 45:
+            return self._bought_message()
+        return None
 
     async def entity(self, peer):
         return SimpleNamespace(id=peer)
@@ -109,6 +156,15 @@ async def run() -> None:
         assert msg["media"]["name"] == "clip final.mp4", msg
         assert msg["media"]["size"] == len(BLOB), msg
         print("ok  messages: kind=%s name=%r size=%d" % (msg["media"]["kind"], msg["media"]["name"], msg["media"]["size"]))
+
+        locked = r.json()["messages"][1]
+        assert locked["media"]["kind"] == "photo", locked
+        assert locked["media"]["paid"] == {
+            "stars": 120, "unlocked": False, "count": 1, "kind": "photo",
+            "duration": None, "width": 1280, "height": 720,
+        }, locked
+        assert locked["media"]["size"] == 0 and locked["media"]["width"] == 1280, locked
+        print("ok  paid post listed:", locked["media"]["paid"]["stars"], "stars, locked")
 
         # full download (forced attachment)
         r = await client.get("/api/media/-1001234567890/42")
@@ -153,6 +209,38 @@ async def run() -> None:
         r = await client.get("/api/media/-1001234567890/7")
         assert r.status_code == 404, r.status_code
 
+        # a locked Stars post is listed but never served
+        r = await client.get("/api/media/-1001234567890/44")
+        assert r.status_code == 402, (r.status_code, r.text)
+        r = await client.get("/api/media/-1001234567890/44?dl=0")
+        assert r.status_code == 402, r.status_code
+        print("ok  locked paid post ->402")
+
+        # ...but one that was actually bought serves like any other media
+        r = await client.get("/api/media/-1001234567890/45")
+        assert r.status_code == 200, (r.status_code, r.text)
+        assert r.content == BLOB and int(r.headers["content-length"]) == len(BLOB)
+        assert r.headers["content-type"] == "video/mp4"
+        print("ok  bought paid post ->200,", len(r.content), "bytes")
+
+        # the recheck endpoint forces the getExtendedMedia lookup
+        r = await client.post("/api/paid/-1001234567890/44/check")
+        assert r.status_code == 200, (r.status_code, r.text)
+        body = r.json()
+        assert body["unlocked"] is False and body["stars"] == 120, body
+        assert body["media"]["kind"] == "photo" and body["media"]["paid"]["unlocked"] is False, body
+
+        r = await client.post("/api/paid/-1001234567890/45/check")
+        assert r.status_code == 200, (r.status_code, r.text)
+        body = r.json()
+        assert body["unlocked"] is True and body["stars"] == 120, body
+        assert body["media"]["kind"] == "video" and body["media"]["size"] == len(BLOB), body
+        assert body["media"]["paid"]["unlocked"] is True, body
+
+        r = await client.post("/api/paid/-1001234567890/42/check")
+        assert r.status_code == 400, (r.status_code, r.text)
+        print("ok  paid recheck: locked / bought / not-a-paid-post")
+
         # photos with a progressive size: message.file.size disagrees with the
         # bytes Telegram actually serves, and the grid must not fetch the
         # full-resolution image as its thumbnail.
@@ -178,6 +266,115 @@ async def run() -> None:
         assert tg.media_size(photo_msg) == 55_000, tg.media_size(photo_msg)
         assert tg.thumb_index(photo_msg) == 0, tg.thumb_index(photo_msg)
         print("ok  photo size resolves to progressive bytes; thumbnail stays small")
+
+        # getExtendedMedia is what turns a bought post into downloadable media:
+        # getMessages keeps returning the blurred preview even after payment.
+        class ExtClient:
+            async def get_input_entity(self, peer):
+                return tl.InputPeerChannel(channel_id=1234567890, access_hash=0)
+
+            async def __call__(self, request):
+                from telethon.tl import functions as fn
+                assert isinstance(request, fn.messages.GetExtendedMediaRequest), request
+                assert request.id == [44], request.id
+                return tl.Updates(
+                    updates=[tl.UpdateMessageExtendedMedia(
+                        peer=tl.PeerChannel(1234567890), msg_id=44,
+                        extended_media=[tl.MessageExtendedMedia(media=tl.MessageMediaPhoto(photo=photo))],
+                    )],
+                    users=[], chats=[], date=dt.datetime.now(dt.timezone.utc), seq=0,
+                )
+
+        stub = SimpleNamespace(client=ExtClient(), _paid_checked={}, _remember=lambda m: None)
+        bought = fake._paid_message()
+        assert tg.paid_info(bought)["unlocked"] is False
+        resolved = await tg.UserSession.resolve_paid(stub, bought, force=True)
+        assert tg.paid_info(resolved)["unlocked"] is True, tg.paid_info(resolved)
+        assert tg.media_kind(tg.downloadable(resolved)) == "photo"
+        # once resolved, a second call must not spend another request
+        assert stub._paid_checked, stub._paid_checked
+        assert await tg.UserSession.resolve_paid(stub, resolved, force=True) is resolved
+        print("ok  getExtendedMedia unlocks the bought post")
+
+        # A bought post's thumbnail goes through ``download_media``, which only
+        # unwraps real Message objects — handing it the PaidView shim silently
+        # downloads nothing, leaving the tile blank.
+        class ThumbClient:
+            def __init__(self):
+                self.targets = []
+
+            async def download_media(self, target, file=None, thumb=None):
+                self.targets.append((target, thumb))
+                file.write(b"\xff\xd8\xffthumb")
+
+        thumb_photo = tl.Photo(
+            id=7, access_hash=8, file_reference=b"r", date=dt.datetime(2026, 1, 3, tzinfo=dt.timezone.utc),
+            dc_id=2, sizes=[tl.PhotoSize(type="m", w=320, h=240, size=999)],
+        )
+        thumb_msg = tl.Message(
+            id=46,
+            peer_id=tl.PeerChannel(1234567890),
+            date=dt.datetime(2026, 1, 3, tzinfo=dt.timezone.utc),
+            message="",
+            media=tl.MessageMediaPaidMedia(
+                stars_amount=5,
+                extended_media=[tl.MessageExtendedMedia(media=tl.MessageMediaPhoto(photo=thumb_photo))],
+            ),
+        )
+        thumb_client = ThumbClient()
+        view = tg.paid_view(thumb_msg)
+        assert view is not None, "bought post must expose a download view"
+        thumb_bytes = await tg._download_thumb(SimpleNamespace(client=thumb_client), view)
+        assert thumb_bytes == b"\xff\xd8\xffthumb", thumb_bytes
+        target, thumb_index = thumb_client.targets[0]
+        assert isinstance(target, tl.MessageMediaPhoto), type(target)
+        assert thumb_index == 0, thumb_index
+        print("ok  bought post thumbnail resolves through its inner media")
+
+        # The real gallery path must sweep paid posts in and resolve purchases.
+        # ``_sweep_paid`` is a coroutine; calling it without await used to hand
+        # ``messages`` a coroutine and break the whole page.
+        class GalleryClient:
+            def __init__(self):
+                self.ext_calls = 0
+
+            async def get_entity(self, peer):
+                return tl.InputPeerChannel(channel_id=1234567890, access_hash=0)
+
+            async def get_input_entity(self, peer):
+                return tl.InputPeerChannel(channel_id=1234567890, access_hash=0)
+
+            async def get_messages(self, entity, filter=None, limit=48, offset_id=0, search=None):
+                if filter is not None:
+                    return []
+                return [
+                    fake._paid_message(),
+                    tl.Message(id=43, peer_id=tl.PeerChannel(1234567890),
+                               date=dt.datetime(2026, 1, 3, tzinfo=dt.timezone.utc),
+                               message="just text", media=None),
+                ]
+
+            async def __call__(self, request):
+                self.ext_calls += 1
+                return tl.Updates(
+                    updates=[tl.UpdateMessageExtendedMedia(
+                        peer=tl.PeerChannel(1234567890), msg_id=44,
+                        extended_media=[tl.MessageExtendedMedia(media=tl.MessageMediaPhoto(photo=thumb_photo))],
+                    )],
+                    users=[], chats=[], date=dt.datetime.now(dt.timezone.utc), seq=0,
+                )
+
+        gallery = SimpleNamespace(client=GalleryClient(), _msg_cache={}, _paid_checked={})
+        for name in ("_remember", "messages", "resolve_paid", "_sweep_paid"):
+            setattr(gallery, name, MethodType(getattr(tg.UserSession, name), gallery))
+        page = await gallery.messages(-1001234567890, kind="media")
+        assert len(page["messages"]) == 1, page
+        item = page["messages"][0]
+        assert item["id"] == 44, item
+        assert item["media"]["paid"]["unlocked"] is True, item
+        assert item["media"]["kind"] == "photo" and item["media"]["size"] == 999, item
+        assert gallery.client.ext_calls == 1, gallery.client.ext_calls
+        print("ok  gallery page sweeps in paid posts and resolves the purchase")
 
         # delivery description
         from telethon.tl import types as t

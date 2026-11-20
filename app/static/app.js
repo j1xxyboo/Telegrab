@@ -571,7 +571,9 @@ const KIND_ICON = {
 function tile(item) {
   const media = item.media;
   const kind = media.kind;
-  const node = el("div", { class: "tile", "data-id": item.id });
+  const paid = media.paid || null;
+  const locked = !!(paid && !paid.unlocked);
+  const node = el("div", { class: "tile" + (locked ? " paid" : ""), "data-id": item.id });
   if (S.selected.has(item.id)) node.classList.add("selected");
 
   const placeholder = () => {
@@ -582,14 +584,19 @@ function tile(item) {
   };
 
   if (kind === "photo" || kind === "video" || kind === "animation" || kind === "sticker") {
-    const img = el("img", { src: `/api/thumb/${S.chat.id}/${item.id}`, alt: "", loading: "lazy", decoding: "async" });
+    // Paid posts get a versioned URL: ?p=1 for the blur, ?u=1 once bought. The
+    // thumbnail response is cached for a day, so reusing one URL would keep
+    // showing the old blur after the post was paid for.
+    const q = paid ? (locked ? "?p=1" : "?u=1") : "";
+    const thumbBase = `/api/thumb/${S.chat.id}/${item.id}${q}`;
+    const img = el("img", { src: thumbBase, alt: "", loading: "lazy", decoding: "async" });
     img.addEventListener("load", () => { img.classList.add("loaded"); node.classList.add("ready"); });
     let attempts = 0;
     img.addEventListener("error", () => {
       // A single transient failure (Telegram flood wait, dropped connection)
       // should not blank the tile: retry once, then fall back to the icon.
       if (attempts++ === 0) {
-        setTimeout(() => { img.src = `/api/thumb/${S.chat.id}/${item.id}?r=1`; }, 400);
+        setTimeout(() => { img.src = thumbBase + (q ? "&r=1" : "?r=1"); }, 400);
         return;
       }
       placeholder();
@@ -606,18 +613,33 @@ function tile(item) {
   }
 
   const tagLabel = { photo: "PHOTO", video: "VIDEO", animation: "GIF", voice: "VOICE", audio: "AUDIO", sticker: "STICKER", file: "FILE" }[kind];
-  if (tagLabel && kind !== "photo") node.append(el("div", { class: "tag" }, [icon(KIND_ICON[kind]), tagLabel]));
+  if (locked) {
+    node.append(el("div", { class: "stars" }, [icon("lock"), `⭐ ${paid.stars}`]));
+  } else if (tagLabel && kind !== "photo") {
+    node.append(el("div", { class: "tag" }, [icon(KIND_ICON[kind]), tagLabel]));
+  }
 
   if (kind === "file" && media.name) node.append(el("div", { class: "fname" }, media.name));
 
   node.append(el("div", { class: "check" }, icon("check")));
 
-  const quick = el("div", { class: "quick", title: "Download" }, icon("dl"));
-  quick.addEventListener("click", (event) => {
-    event.stopPropagation();
-    downloadItem(item);
-  });
-  node.append(quick);
+  if (locked) {
+    // Nothing to download until the post is paid for — the button opens the
+    // explanation instead of firing a request Telegram will refuse.
+    const quick = el("div", { class: "quick locked", title: `Paid post · ${paid.stars} Stars` }, icon("lock"));
+    quick.addEventListener("click", (event) => {
+      event.stopPropagation();
+      openLightbox(item);
+    });
+    node.append(quick);
+  } else {
+    const quick = el("div", { class: "quick", title: "Download" }, icon("dl"));
+    quick.addEventListener("click", (event) => {
+      event.stopPropagation();
+      downloadItem(item);
+    });
+    node.append(quick);
+  }
 
   node.addEventListener("click", () => {
     if (S.selecting) toggleSelect(item);
@@ -628,6 +650,12 @@ function tile(item) {
 }
 
 /* ------------------------------------------------------------------ selection */
+
+function refreshTile(item) {
+  const node = $(`.tile[data-id="${item.id}"]`);
+  if (!node) return;
+  node.replaceWith(tile(item));
+}
 
 function toggleSelect(item) {
   if (S.selected.has(item.id)) S.selected.delete(item.id);
@@ -661,7 +689,12 @@ function mediaUrl(item, dl = true, chatId = S.chat?.id) {
   return `/api/media/${chatId}/${item.id}${dl ? "" : "?dl=0"}`;
 }
 
+function isLocked(item) {
+  return !!(item.media?.paid && !item.media.paid.unlocked);
+}
+
 function downloadItem(item) {
+  if (isLocked(item)) return openLightbox(item);
   const link = document.createElement("a");
   link.href = mediaUrl(item);
   link.download = item.media?.name || `telegram_${item.id}`;
@@ -674,6 +707,14 @@ function downloadItem(item) {
 let bulkRunning = false;
 
 async function downloadMany(items) {
+  const locked = items.filter(isLocked);
+  if (locked.length) {
+    items = items.filter((item) => !isLocked(item));
+    if (!items.length) {
+      return toast(`That ${locked.length === 1 ? "post is" : "posts are"} paid — pay in Telegram first.`, "err");
+    }
+    toast(`Skipping ${locked.length} paid post${locked.length === 1 ? "" : "s"} — pay in Telegram first.`);
+  }
   if (!items.length) return;
   if (bulkRunning) return toast("A batch is already running.", "err");
 
@@ -732,6 +773,49 @@ async function saveToFolder(items, dir) {
 
 /* ------------------------------------------------------------------ lightbox */
 
+function paidCard(item, paid) {
+  const image = el("img", { class: "paid-blur", src: `/api/thumb/${S.chat.id}/${item.id}?p=1`, alt: "", decoding: "async" });
+  image.addEventListener("error", () => image.remove());
+  const check = el("button", { class: "btn ghost", type: "button" }, "I've paid — check again");
+  check.addEventListener("click", () => recheckPaid(item, check));
+  return el("div", { class: "paid-card" }, [
+    image,
+    el("div", { class: "paid-body" }, [
+      el("div", { class: "paid-head" }, [icon("lock"), el("span", {}, `Paid post · ⭐ ${paid.stars}`)]),
+      el("div", { class: "paid-note" },
+        "Telegram does not send this file until the post is paid for, so there is nothing here to unlock yet. " +
+        "Pay it in the official app or on your phone, then check again — once the payment is on your account " +
+        "this post previews and downloads like any other."),
+      el("div", { class: "paid-actions" }, check),
+    ]),
+  ]);
+}
+
+async function recheckPaid(item, button) {
+  if (button.disabled) return;
+  const label = button.textContent;
+  button.disabled = true;
+  button.textContent = "Checking…";
+  try {
+    const res = await api(`/api/paid/${S.chat.id}/${item.id}/check`, { method: "POST" });
+    if (res.unlocked) {
+      // Swap the locked payload for the real one: the tile, the viewer and any
+      // later download all read from this same object.
+      item.media = res.media || item.media;
+      refreshTile(item);
+      openLightbox(item);
+      toast("Payment found — this post is unlocked.", "ok");
+      return;
+    }
+    toast("No payment on this post yet.", "err");
+  } catch (err) {
+    toast(err.message, "err");
+  } finally {
+    button.disabled = false;
+    button.textContent = label;
+  }
+}
+
 function openLightbox(item) {
   S.lbIndex = S.messages.indexOf(item);
   const box = $("#lightbox");
@@ -750,8 +834,17 @@ function openLightbox(item) {
   $("#lb-avatar").replaceWith(lbAvatar);
   $("#lb-caption").textContent = item.text || "";
   $("#lb-dl").onclick = () => downloadItem(item);
+  const paid = media.paid || null;
+  const locked = !!(paid && !paid.unlocked);
+  $("#lb-dl").style.visibility = locked ? "hidden" : "";
   $("#lb-prev").disabled = S.lbIndex <= 0;
   $("#lb-next").disabled = S.lbIndex >= S.messages.length - 1;
+
+  if (locked) {
+    stage.append(paidCard(item, paid));
+    box.classList.remove("hidden");
+    return;
+  }
 
   const src = mediaUrl(item, false);
   const failed = (what) => () => {

@@ -330,18 +330,32 @@ async def media(peer: int, message_id: int, request: Request, dl: int = 1):
         msg = await session.message(peer, message_id)
     except Exception as exc:
         raise HTTPException(502, f"Could not open message: {exc}")
-    kind = tg.media_kind(msg)
-    if msg is None or kind is None:
+    if msg is None:
+        raise HTTPException(404, "No such message")
+    view = tg.downloadable(msg)
+    if view is None:
+        info = tg.paid_info(msg)
+        if info is None:
+            raise HTTPException(404, "No downloadable media in that message")
+        # The purchase may have landed since we last asked Telegram.
+        view = tg.downloadable(await session.resolve_paid(msg, force=True))
+        if view is None:
+            raise HTTPException(
+                402,
+                f"Paid post — {info['stars']} Stars. Telegram never sends the file until the post is paid for.",
+            )
+    kind = tg.media_kind(view)
+    if kind is None:
         raise HTTPException(404, "No downloadable media in that message")
-    filename = tg.media_filename(msg, kind)
-    file = getattr(msg, "file", None)
+    filename = tg.media_filename(view, kind)
+    file = getattr(view, "file", None)
     mime = (getattr(file, "mime_type", None) if file else None) or (
         "image/jpeg" if kind == "photo" else "application/octet-stream"
     )
     # ``message.file.size`` is wrong for photos carrying a progressive size, and
     # a wrong Content-Length makes the browser kill the transfer ("network
     # error") once the real end of the stream arrives.
-    size = tg.media_size(msg)
+    size = tg.media_size(view)
 
     disposition = "attachment" if dl else "inline"
     headers = {
@@ -382,7 +396,7 @@ async def media(peer: int, message_id: int, request: Request, dl: int = 1):
 
     async def body():
         try:
-            async for chunk in session.iter_media(msg, start=start, length=length):
+            async for chunk in session.iter_media(view, start=start, length=length):
                 yield chunk
         except asyncio.CancelledError:
             raise
@@ -394,6 +408,32 @@ async def media(peer: int, message_id: int, request: Request, dl: int = 1):
     return StreamingResponse(body(), status_code=status_code, headers=headers, media_type=mime)
 
 
+@app.post("/api/paid/{peer}/{message_id}/check")
+async def paid_check(peer: int, message_id: int, request: Request):
+    """Re-ask Telegram whether this paid post has been bought.
+
+    ``getMessages`` keeps returning the locked preview after payment, so a post
+    bought moments ago still looks locked on a page loaded a minute earlier.
+    This forces the ``messages.getExtendedMedia`` lookup and reports the result.
+    """
+    session = await authorized(request)
+    try:
+        msg = await session.message(peer, message_id, fresh=True)
+    except Exception as exc:
+        raise HTTPException(502, f"Could not open message: {exc}")
+    if msg is None:
+        raise HTTPException(404, "No such message")
+    info = tg.paid_info(msg)
+    if info is None:
+        raise HTTPException(400, "That message is not a paid post")
+    unlocked = tg.downloadable(msg) is not None
+    return {
+        "unlocked": unlocked,
+        "stars": info["stars"],
+        "media": tg.message_payload(msg).get("media"),
+    }
+
+
 @app.get("/api/thumb/{peer}/{message_id}")
 async def thumb(peer: int, message_id: int, request: Request):
     session = await authorized(request)
@@ -403,6 +443,7 @@ async def thumb(peer: int, message_id: int, request: Request):
         raise HTTPException(502, f"Could not open message: {exc}")
     if msg is None:
         raise HTTPException(404, "No such message")
+    msg = await session.resolve_paid(msg)
     data = await tg.cached_thumbnail(session, msg)
     if not data:
         raise HTTPException(404, "No thumbnail")

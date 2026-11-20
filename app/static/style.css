@@ -332,6 +332,19 @@ button { -webkit-appearance: none; appearance: none; }
 .tile .quick:hover { background: var(--accent); }
 .tile .quick .ic { width: 18px; height: 18px; }
 .selecting .tile .quick { display: none; }
+
+/* Paid (Stars) posts: blurred preview + price, no download until bought. */
+.tile.paid img { filter: blur(14px); transform: scale(1.08); }
+.tile.paid:hover img { transform: scale(1.12); }
+.tile.paid::after { background: rgba(0,0,0,.22); }
+.tile .stars {
+  position: absolute; bottom: 6px; left: 6px; z-index: 1; display: inline-flex; align-items: center; gap: 4px;
+  background: rgba(0,0,0,.6); color: #fff; border-radius: 10px; padding: 2px 8px;
+  font-size: 12px; font-weight: 600; backdrop-filter: blur(6px);
+}
+.tile .stars .ic { width: 12px; height: 12px; }
+.tile .quick.locked { opacity: 1; }
+.tile .quick.locked:hover { background: rgba(0,0,0,.78); }
 .tile .fname {
   position: absolute; bottom: 0; left: 0; right: 0; padding: 24px 10px 8px; z-index: 1;
   background: linear-gradient(transparent, rgba(0,0,0,.75)); font-size: 13px;
@@ -378,6 +391,17 @@ button { -webkit-appearance: none; appearance: none; }
 .lb-stage img.zoomed { max-width: none; max-height: none; cursor: zoom-out; animation: none; }
 .lb-stage .filecard { margin: auto; text-align: center; color: rgba(255,255,255,.7); }
 .lb-stage .filecard .ic { width: 64px; height: 64px; color: rgba(255,255,255,.4); margin-bottom: 14px; }
+.lb-stage .paid-card {
+  margin: auto; width: min(420px, 86vw); border-radius: 16px; overflow: hidden;
+  background: rgba(255,255,255,.06); color: #fff; text-align: center;
+}
+.lb-stage .paid-card .paid-blur { width: 100%; display: block; filter: blur(18px); transform: scale(1.05); }
+.lb-stage .paid-card .paid-body { padding: 18px 20px 22px; }
+.lb-stage .paid-card .paid-head { display: inline-flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 600; }
+.lb-stage .paid-card .paid-head .ic { width: 18px; height: 18px; }
+.lb-stage .paid-card .paid-note { margin-top: 10px; font-size: 13px; line-height: 1.5; color: rgba(255,255,255,.65); }
+.lb-stage .paid-card .paid-actions { margin-top: 16px; }
+.lb-stage .paid-card .paid-actions .btn { width: 100%; }
 .lb-nav {
   position: absolute; top: 0; bottom: 0; width: 88px; border: 0; background: transparent; z-index: 2;
   color: rgba(255,255,255,.55); cursor: pointer; display: grid; place-items: center; transition: color .15s, background .15s;

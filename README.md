@@ -15,7 +15,7 @@ It looks and works like Telegram Web: chat list on the left, media gallery on th
 - **Sign in with QR code** — scan it from Telegram on your phone or PC. No SMS, no code to type.
 - **Or sign in with phone number** — Telegram sends you a code, plus your two-step password if you have one.
 - **Your chat list** — avatars, last message, time, unread counts, and a 🔒 on chats with saving disabled.
-- **Media gallery per chat** — tabs for Media / Photos / Videos / Files, search, grouped by month, loads more as you scroll.
+- **Media gallery per chat** — tabs for Media / Photos / Videos / Files, search, grouped by month, loads more as you scroll. Paid (Stars) posts appear here too, with a blurred preview and the ⭐ price.
 - **Full-screen viewer** — photos (click to zoom), videos with seeking, audio, and ‹ › arrows / keyboard arrows.
 - **Downloads** — one file, everything loaded, or pick several with **Select**. In Chrome/Edge, bulk downloads go straight into a folder you choose.
 - **Works on phones** — the layout switches to a mobile view under 860 px wide.
@@ -28,6 +28,14 @@ It looks and works like Telegram Web: chat list on the left, media gallery on th
 TeleGrab talks to Telegram directly (the MTProto protocol, via the [Telethon](https://github.com/LonamiWebs/Telethon) library). It downloads the file the same way the app does for showing it, and passes it to your browser.
 
 > You can only download what your account can already see. TeleGrab doesn't get around private channels, bans or paid content. Respect the content owners and the law where you live.
+
+## Paid (Stars) posts
+
+A post sold for Stars arrives from Telegram as a price plus a blurred preview — the file itself is only handed to an account after the payment is on its ledger, so no client can download it before then. TeleGrab therefore lists these posts instead of hiding them: the gallery shows the blurred tile with a ⭐ badge, and the viewer explains the price. Once you have actually paid for the post (in the official app or on your phone), it turns into a normal, downloadable item — the paid file is fetched exactly like any other media.
+
+The gallery checks for a purchase when it loads a page and before it starts a download. Telegram keeps reporting the blurred preview until you ask specifically, so if a post stays locked right after you paid, open it and press **I've paid — check again**.
+
+Bulk download skips posts you have not paid for, and the media endpoint answers `402` for them rather than starting a transfer that cannot finish.
 
 ---
 
